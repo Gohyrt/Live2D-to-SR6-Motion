@@ -8,7 +8,7 @@ using System.Linq;
 
 namespace SR6PluginProject
 {
-    [BepInPlugin("com.aoligeas.sr6.live2d", "Live2D to SR6 Motion", "1.0.0")]
+    [BepInPlugin("com.aoligeas.sr6.live2d", "Live2D to SR6 Motion", "1.1.0")]
     public class SR6Plugin : BaseUnityPlugin
     {
         [Serializable]
@@ -27,15 +27,19 @@ namespace SR6PluginProject
 
         private SerialPort _serialPort;
         private bool _showMenu = true, _isInit = false;
+        private bool _isPaused = false;
+        private KeyCode _pauseKey = KeyCode.F10;
+        private bool _isWaitingForKey = false;
+        private bool _isWaitingForPauseKey = false;
         private string _comPort = "COM4";
         private Rect _windowRect = new Rect(20, 20, 500, 850);
         private int _windowID = 1001;
         private Vector2 _scrollPos, _pickerScrollPos;
 
         private float _uiOpacity = 0.95f;
-        private Color _pinkTheme = new Color(0.87f, 0.41f, 0.45f); 
-        private Color _pinkDark = new Color(0.4f, 0.15f, 0.2f);    
-        private Color _greenNeon = new Color(0f, 1f, 0f);          
+        private Color _pinkTheme = new Color(0.87f, 0.41f, 0.45f);
+        private Color _pinkDark = new Color(0.4f, 0.15f, 0.2f);
+        private Color _greenNeon = new Color(0f, 1f, 0f);
         private Texture2D _pinkTex, _darkTex, _neonTex;
 
         private List<string> _templateNames = new List<string>() { "默认模板" };
@@ -61,7 +65,8 @@ namespace SR6PluginProject
             Logger.LogInfo($"v{Info.Metadata.Version} 初始化成功！爱来自 aoligeas");
             _menuKey = (KeyCode)PlayerPrefs.GetInt("SR6_MenuKey", (int)KeyCode.F9);
             _uiOpacity = PlayerPrefs.GetFloat("SR6_Opacity", 0.95f);
-            _targetHz = PlayerPrefs.GetInt("SR6_TargetHz", 50); 
+            _targetHz = PlayerPrefs.GetInt("SR6_TargetHz", 50);
+            _pauseKey = (KeyCode)PlayerPrefs.GetInt("SR6_PauseKey", (int)KeyCode.F10);
 
             _pinkTex = MakeTex(1, 1, _pinkTheme);
             _darkTex = MakeTex(1, 1, _pinkDark);
@@ -88,16 +93,41 @@ namespace SR6PluginProject
 
         void Update()
         {
-            if (Input.GetKeyDown(_menuKey)) _showMenu = !_showMenu;
+            if (_isWaitingForKey || _isWaitingForPauseKey)
+            {
 
-            
+                foreach (KeyCode kcode in Enum.GetValues(typeof(KeyCode)))
+                {
+                    if (Input.GetKeyDown(kcode) && kcode != KeyCode.None && kcode != KeyCode.Escape)
+                    {
+                        if (_isWaitingForKey) { _menuKey = kcode; PlayerPrefs.SetInt("SR6_MenuKey", (int)_menuKey); }
+                        if (_isWaitingForPauseKey) { _pauseKey = kcode; PlayerPrefs.SetInt("SR6_PauseKey", (int)_pauseKey); }
+                        _isWaitingForKey = _isWaitingForPauseKey = false;
+                        break;
+                    }
+                }
+                return;
+            }
+
+
+            if (Input.GetKeyDown(_menuKey)) _showMenu = !_showMenu;
+            if (Input.GetKeyDown(_pauseKey)) _isPaused = !_isPaused;
+
+
             if (!_isInit || (_allSceneParams.Count == 0 && Time.frameCount % 300 == 0))
             {
                 ScanModel();
-                
                 if (!_isInit) LoadCurrentTemplate();
                 _isInit = true;
             }
+
+
+            if (_isPaused)
+            {
+                _displayHz = 0;
+                return;
+            }
+
 
             foreach (var axis in _axisList) axis.IsActive = false;
             foreach (var param in _allSceneParams)
@@ -122,9 +152,23 @@ namespace SR6PluginProject
                 axis.CurrentVal = Mathf.Lerp(axis.CurrentVal, target, _globalSmooth);
             }
 
-            if (Time.time - _lastSendTime >= 1f / Mathf.Max(1, _targetHz)) { SendData(); _lastSendTime = Time.time; _actualSendCount++; }
-            if (Time.time - _counterTimer >= 1f) { _displayHz = _actualSendCount; _actualSendCount = 0; _counterTimer = Time.time; }
+
+            if (Time.time - _lastSendTime >= 1f / Mathf.Max(1, _targetHz))
+            {
+                SendData();
+                _lastSendTime = Time.time;
+                _actualSendCount++;
+            }
+
+
+            if (Time.time - _counterTimer >= 1f)
+            {
+                _displayHz = _actualSendCount;
+                _actualSendCount = 0;
+                _counterTimer = Time.time;
+            }
         }
+
 
         private void UpdateAxisRange(AxisConfig a)
         {
@@ -135,9 +179,15 @@ namespace SR6PluginProject
         private void SendData()
         {
             if (_serialPort == null || !_serialPort.IsOpen) return;
+            int interval = Mathf.Clamp(1000 / Mathf.Max(1, _targetHz), 1, 999);
             string cmd = "";
-            foreach (var a in _axisList) cmd += $"{a.TCodeKey}{Mathf.Clamp(Mathf.RoundToInt(a.CurrentVal * 99f), 0, 99):D2} ";
-            cmd += "I50\r\n";
+            foreach (var a in _axisList)
+            {
+
+                int val = Mathf.Clamp(Mathf.RoundToInt(a.CurrentVal * 999f), 0, 999);
+                cmd += $"{a.TCodeKey}{val:D3} ";
+            }
+            cmd += $"I{interval}\r\n";
             try { _serialPort.Write(cmd); } catch { }
         }
 
@@ -145,7 +195,7 @@ namespace SR6PluginProject
         {
             if (!_showMenu) return;
 
-            GUI.skin.box.normal.background = _darkTex; 
+            GUI.skin.box.normal.background = _darkTex;
             GUI.skin.textField.normal.background = _darkTex;
             GUI.skin.textField.focused.background = _darkTex;
             GUI.skin.textField.normal.textColor = Color.white;
@@ -183,31 +233,39 @@ namespace SR6PluginProject
             _newTemplateName = GUILayout.TextField(_newTemplateName, GUILayout.ExpandWidth(true));
             if (GUILayout.Button("新建", GUILayout.Width(45))) CreateNewTemplate();
             if (GUILayout.Button("重置", GUILayout.Width(45))) ResetCurrentTemplate();
-            if (GUILayout.Button("<color=red>删</color>", GUILayout.Width(35))) DeleteTemplate();
+            if (GUILayout.Button("<color=red>删除</color>", GUILayout.Width(35))) DeleteTemplate();
             GUILayout.EndHorizontal();
             GUILayout.EndVertical();
 
             GUI.skin.box.normal.background = Texture2D.whiteTexture;
             GUI.backgroundColor = _pinkTheme;
 
+
             GUILayout.BeginVertical("box");
             GUILayout.BeginHorizontal();
             _comPort = GUILayout.TextField(_comPort, GUILayout.Width(60));
             if (GUILayout.Button(_serialPort != null && _serialPort.IsOpen ? "断开" : "连接")) ConnectSerial();
             GUILayout.FlexibleSpace();
-            GUILayout.Label("菜单键:");
-            string keyStr = GUILayout.TextField(_menuKey.ToString(), GUILayout.Width(50));
-            if (Enum.TryParse(keyStr, true, out KeyCode newK) && _menuKey != newK) { _menuKey = newK; PlayerPrefs.SetInt("SR6_MenuKey", (int)_menuKey); }
+
+
+            if (GUILayout.Button(_isWaitingForKey ? "<color=yellow>请按键...</color>" : $"菜单:[{_menuKey}]", GUILayout.Width(100)))
+                _isWaitingForKey = true;
+
+            if (GUILayout.Button(_isWaitingForPauseKey ? "<color=yellow>请按键...</color>" : $"停止:[{_pauseKey}]", GUILayout.Width(100)))
+                _isWaitingForPauseKey = true;
+
             GUILayout.EndHorizontal();
 
-            _uiOpacity = LabelSlider("透明度", _uiOpacity, 0.1f, 1.0f);
+            _uiOpacity = LabelSlider("透明度", _uiOpacity, 0f, 1.0f);
             _targetHz = (int)LabelSlider($"输出频率: <color=cyan>{_displayHz}Hz</color>", _targetHz, 10, 200);
 
             if (GUILayout.Button("<color=yellow>保存当前全部配置</color>"))
             {
-                SaveTemplateList(); SaveCurrentTemplate();
+                SaveTemplateList();
+                SaveCurrentTemplate();
                 PlayerPrefs.SetFloat("SR6_Opacity", _uiOpacity);
                 PlayerPrefs.SetInt("SR6_TargetHz", _targetHz);
+                PlayerPrefs.SetInt("SR6_PauseKey", (int)_pauseKey);
                 PlayerPrefs.Save();
             }
             GUILayout.EndVertical();
@@ -239,7 +297,7 @@ namespace SR6PluginProject
             if (newInvert != cfg.Invert)
             {
                 cfg.Invert = newInvert;
-                SaveCurrentTemplate(); 
+                SaveCurrentTemplate();
             }
 
             if (GUILayout.Button("C", GUILayout.Width(25))) cfg.Offset = 0.5f;
@@ -254,7 +312,7 @@ namespace SR6PluginProject
                 cfg.MaxStr = GUILayout.TextField(cfg.MaxStr, GUILayout.Width(50)); GUILayout.Label($"(Raw:{cfg.RawValue:F1})", GUILayout.Width(80));
                 if (_isRangeLocked) { float.TryParse(cfg.MinStr, out cfg.Min); float.TryParse(cfg.MaxStr, out cfg.Max); }
                 GUILayout.EndHorizontal();
-                cfg.Multiplier = LabelSlider("倍率", cfg.Multiplier, 0.1f, 3.0f);
+                cfg.Multiplier = LabelSlider("倍率", cfg.Multiplier, 0f, 2.0f);
             }
             cfg.Offset = LabelSlider(cfg.IsActive ? "偏移" : "调试", cfg.Offset, 0f, 1f);
 
@@ -266,11 +324,11 @@ namespace SR6PluginProject
         private void DrawNeonHandleBar(float v, bool active)
         {
             Rect r = GUILayoutUtility.GetRect(400, 12);
-            GUI.DrawTexture(r, _darkTex); 
+            GUI.DrawTexture(r, _darkTex);
 
             float handleWidth = 10f;
             Rect handleRect = new Rect(r.x + (v * (r.width - handleWidth)), r.y - 1, handleWidth, 14);
-            GUI.DrawTexture(handleRect, active ? _neonTex : Texture2D.whiteTexture); 
+            GUI.DrawTexture(handleRect, active ? _neonTex : Texture2D.whiteTexture);
         }
 
         private void DrawParameterPicker(AxisConfig cfg)
