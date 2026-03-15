@@ -25,7 +25,8 @@
 *   **Global Smoothing**: Built-in Lerp algorithm to filter out jittery animations and protect hardware.
 *   **实时数据处理**：通过自定义倍率与偏移实现精准行程控制。内置Lerp 平滑算法，有效过滤动画抽搐，保护硬件电机。
 
-<sub><font color="#888">*A comfortable UI / 舒适的 UI*</font></sub>
+#### **A comfortable UI / 舒适的界面**
+*    Made with ❤️
 
 
 ---
