@@ -21,8 +21,6 @@
 *   Real-time Processing: Precise control via custom **Multiplier** and **Offset**.
 *   Global Smoothing: Built-in Lerp algorithm to filter out jittery animations and protect hardware.
 
-#### **Comfortable UI**
-*    Made with ❤️
 
 
 ---
