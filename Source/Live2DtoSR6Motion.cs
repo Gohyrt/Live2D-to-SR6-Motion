@@ -5,17 +5,19 @@ using BepInEx;
 using UnityEngine;
 using Live2D.Cubism.Core;
 using System.Linq;
+using System.Net.Sockets;
+using System.Text;
 
 namespace SR6PluginProject
 {
-    [BepInPlugin("com.gohyrt.sr6.live2d", "Live2D to SR6 Motion", "1.2.0")]
+    [BepInPlugin("com.gohyrt.sr6.live2d", "Live2D to SR6 Motion", "1.2.1")]
     public class SR6Plugin : BaseUnityPlugin
     {
         [Serializable]
         public class AxisConfig
         {
             public string DisplayLabel; public string TCodeKey;
-            public string Name = "Unbound";
+            public string Name = "未绑定";
             public float Min = 0f, Max = 1f;
             public float Multiplier = 1.0f, Offset = 0.5f;
             public bool Invert = false;
@@ -24,42 +26,41 @@ namespace SR6PluginProject
             [NonSerialized] public bool IsActive = false, ShowPicker = false;
             public AxisConfig(string label, string key) { DisplayLabel = label; TCodeKey = key; }
         }
-
         private SerialPort _serialPort;
         private bool _showMenu = true, _isInit = false;
         private bool _isPaused = false;
         private KeyCode _pauseKey = KeyCode.F10;
         private bool _isWaitingForKey = false;
         private bool _isWaitingForPauseKey = false;
-        private string _comPort = "COM4";
+        private string _comPort = "COM3";
         private Rect _windowRect = new Rect(20, 20, 500, 850);
         private int _windowID = 1001;
         private Vector2 _scrollPos, _pickerScrollPos;
-
         private float _uiOpacity = 0.95f;
         private Color _pinkTheme = new Color(0.87f, 0.41f, 0.45f);
         private Color _pinkDark = new Color(0.4f, 0.15f, 0.2f);
         private Color _greenNeon = new Color(0f, 1f, 0f);
         private Texture2D _pinkTex, _darkTex, _neonTex;
-
-        private List<string> _templateNames = new List<string>() { "Default Template" };
+        private List<string> _templateNames = new List<string>() { "默认模板" };
         private int _selectedTemplateIndex = 0;
-        private string _newTemplateName = "New Scene Name";
+        private string _newTemplateName = "新场景名称";
         private Dictionary<string, float> _paramMaxMove = new Dictionary<string, float>();
         private KeyCode _menuKey = KeyCode.F9;
         private List<CubismParameter> _allSceneParams = new List<CubismParameter>();
         private string _searchText = "";
-
         private List<AxisConfig> _axisList = new List<AxisConfig>()
         {
-            new AxisConfig("L0", "L0"), new AxisConfig("R1", "R1"),
-            new AxisConfig("L1", "L1"), new AxisConfig("L2", "L2"),
-            new AxisConfig("R0", "R0"), new AxisConfig("R2", "R2")
-        };
+            new AxisConfig("上下 L0", "L0"), new AxisConfig("倾斜 R1", "R1"),
+            new AxisConfig("前后 L1", "L1"), new AxisConfig("左右 L2", "L2"),
+            new AxisConfig("旋转 R0", "R0"), new AxisConfig("俯仰 R2", "R2")
 
+        };
         private int _targetHz = 50, _displayHz = 0, _actualSendCount = 0;
         private float _globalSmooth = 0.25f, _counterTimer = 0f, _lastSendTime = 0f;
         private bool _isRangeLocked = true;
+        private bool _useWiFi = false;
+        private string _targetIP = "192.168.0.1:8000";
+        private UdpClient _udpClient = new UdpClient();
         private void RenameTemplate()
         {
             string oldName = _templateNames[_selectedTemplateIndex];
@@ -72,7 +73,6 @@ namespace SR6PluginProject
             DeleteOldTemplateData(oldName);
             Logger.LogInfo($"Scene Renamed: {oldName} -> {newName}");
         }
-
         private void DeleteOldTemplateData(string oldName)
         {
             string pre = "SR6_U_" + oldName;
@@ -87,8 +87,6 @@ namespace SR6PluginProject
                 PlayerPrefs.DeleteKey(pre + a.TCodeKey + "_Max");
             }
         }
-
-
         void Awake()
         {
             Logger.LogInfo($"v{Info.Metadata.Version} 初始化成功！爱来自 Gohyrt");
@@ -96,15 +94,14 @@ namespace SR6PluginProject
             _uiOpacity = PlayerPrefs.GetFloat("SR6_Opacity", 0.95f);
             _targetHz = PlayerPrefs.GetInt("SR6_TargetHz", 50);
             _pauseKey = (KeyCode)PlayerPrefs.GetInt("SR6_PauseKey", (int)KeyCode.F10);
-
+            _targetIP = PlayerPrefs.GetString("SR6_WiFi_Addr", "192.168.0.1:8000");
+            _useWiFi = PlayerPrefs.GetInt("SR6_WiFi_Mode", 0) == 1;
             _pinkTex = MakeTex(1, 1, _pinkTheme);
             _darkTex = MakeTex(1, 1, _pinkDark);
             _neonTex = MakeTex(1, 1, _greenNeon);
-
             LoadTemplateList();
             LoadCurrentTemplate();
         }
-
         private Texture2D MakeTex(int width, int height, Color col)
         {
             Color[] pix = new Color[width * height];
@@ -113,13 +110,11 @@ namespace SR6PluginProject
             result.SetPixels(pix); result.Apply();
             return result;
         }
-
         private void ScanModel()
         {
             _allSceneParams = FindObjectsOfType<CubismParameter>().ToList();
             _isInit = true;
         }
-
         void Update()
         {
             if (_isWaitingForKey || _isWaitingForPauseKey)
@@ -137,41 +132,32 @@ namespace SR6PluginProject
                 }
                 return;
             }
-
-
             if (Input.GetKeyDown(_menuKey)) _showMenu = !_showMenu;
             if (Input.GetKeyDown(_pauseKey)) _isPaused = !_isPaused;
-
-
             if (!_isInit || (_allSceneParams.Count == 0 && Time.frameCount % 300 == 0))
             {
                 ScanModel();
                 if (!_isInit) LoadCurrentTemplate();
                 _isInit = true;
             }
-
-
             if (_isPaused)
             {
                 _displayHz = 0;
                 return;
             }
-
-
             foreach (var axis in _axisList) axis.IsActive = false;
             foreach (var param in _allSceneParams)
             {
                 if (param == null) continue;
                 foreach (var axis in _axisList)
                 {
-                    if (axis.Name != "Unbound" && param.name == axis.Name)
+                    if (axis.Name != "未绑定" && param.name == axis.Name)
                     {
                         axis.RawValue = param.Value; axis.IsActive = true;
                         if (!_isRangeLocked) UpdateAxisRange(axis);
                     }
                 }
             }
-
             foreach (var axis in _axisList)
             {
                 float r = Mathf.Max(0.01f, axis.Max - axis.Min);
@@ -180,16 +166,12 @@ namespace SR6PluginProject
                 target = Mathf.Clamp01(axis.Invert ? 1f - target : target);
                 axis.CurrentVal = Mathf.Lerp(axis.CurrentVal, target, _globalSmooth);
             }
-
-
             if (Time.time - _lastSendTime >= 1f / Mathf.Max(1, _targetHz))
             {
                 SendData();
                 _lastSendTime = Time.time;
                 _actualSendCount++;
             }
-
-
             if (Time.time - _counterTimer >= 1f)
             {
                 _displayHz = _actualSendCount;
@@ -197,55 +179,60 @@ namespace SR6PluginProject
                 _counterTimer = Time.time;
             }
         }
-
-
         private void UpdateAxisRange(AxisConfig a)
         {
             if (a.RawValue < a.Min) { a.Min = a.RawValue; a.MinStr = a.Min.ToString("F1"); }
             if (a.RawValue > a.Max) { a.Max = a.RawValue; a.MaxStr = a.Max.ToString("F1"); }
         }
-
         private void SendData()
         {
-            if (_serialPort == null || !_serialPort.IsOpen) return;
             int interval = Mathf.Clamp(1000 / Mathf.Max(1, _targetHz), 1, 999);
             string cmd = "";
             foreach (var a in _axisList)
             {
-
                 int val = Mathf.Clamp(Mathf.RoundToInt(a.CurrentVal * 999f), 0, 999);
                 cmd += $"{a.TCodeKey}{val:D3} ";
             }
             cmd += $"I{interval}\r\n";
-            try { _serialPort.Write(cmd); } catch { }
-        }
+            if (_useWiFi)
+            {
+                try
+                {
+                    string[] parts = _targetIP.Split(':');
+                    string ip = parts[0].Trim();
+                    int port = (parts.Length > 1) ? int.Parse(parts[1].Trim()) : 8000;
 
+                    byte[] buffer = System.Text.Encoding.ASCII.GetBytes(cmd);
+                    _udpClient.Send(buffer, buffer.Length, ip, port);
+                }
+                catch { }
+            }
+            else
+            {
+                if (_serialPort == null || !_serialPort.IsOpen) return;
+                try { _serialPort.Write(cmd); } catch { }
+            }
+        }
         void OnGUI()
         {
             if (!_showMenu) return;
-
             GUI.skin.box.normal.background = _darkTex;
             GUI.skin.textField.normal.background = _darkTex;
             GUI.skin.textField.focused.background = _darkTex;
             GUI.skin.textField.normal.textColor = Color.white;
             GUI.skin.button.normal.background = _darkTex;
-
             Color windowBg = _pinkTheme; windowBg.a = _uiOpacity;
             GUI.backgroundColor = windowBg;
             GUI.contentColor = Color.white;
-
             _windowRect = GUI.Window(_windowID, _windowRect, DrawWindow, "<b><color=#FFD1D1>Live2D-to-SR6-Motion</color></b>");
         }
-
         void DrawWindow(int windowID)
         {
             GUI.DragWindow(new Rect(0, 0, 500, 25));
             GUILayout.BeginArea(new Rect(15, 35, 470, 800));
-
             GUI.skin.box.normal.background = _darkTex;
-
             GUILayout.BeginVertical("box");
-            GUILayout.Label("<color=#FFD1D1><b>Scene Template (Auto-activate on Startup)</b></color>");
+            GUILayout.Label("<color=#FFD1D1><b>场景模板 (启动自动激活)</b></color>");
             for (int i = 0; i < _templateNames.Count; i++)
             {
                 GUILayout.BeginHorizontal();
@@ -260,36 +247,35 @@ namespace SR6PluginProject
             }
             GUILayout.BeginHorizontal();
             _newTemplateName = GUILayout.TextField(_newTemplateName, GUILayout.ExpandWidth(true));
-            if (GUILayout.Button("Create", GUILayout.Width(60))) CreateNewTemplate();
-            if (GUILayout.Button("Rename", GUILayout.Width(60))) RenameTemplate();
-            if (GUILayout.Button("Reset", GUILayout.Width(45))) ResetCurrentTemplate();
-            if (GUILayout.Button("<color=red>Del</color>", GUILayout.Width(35))) DeleteTemplate();
+            if (GUILayout.Button("新建", GUILayout.Width(45))) CreateNewTemplate();
+            if (GUILayout.Button("改名", GUILayout.Width(45))) RenameTemplate();
+            if (GUILayout.Button("重置", GUILayout.Width(45))) ResetCurrentTemplate();
+            if (GUILayout.Button("<color=red>删除</color>", GUILayout.Width(35))) DeleteTemplate();
             GUILayout.EndHorizontal();
             GUILayout.EndVertical();
-
             GUI.skin.box.normal.background = Texture2D.whiteTexture;
             GUI.backgroundColor = _pinkTheme;
-
-
             GUILayout.BeginVertical("box");
             GUILayout.BeginHorizontal();
-            _comPort = GUILayout.TextField(_comPort, GUILayout.Width(60));
-            if (GUILayout.Button(_serialPort != null && _serialPort.IsOpen ? "Disconnect" : "Connect")) ConnectSerial();
+            _useWiFi = GUILayout.Toggle(_useWiFi, _useWiFi ? "<b><color=cyan>WIFI</color></b>" : "串口", "button", GUILayout.Width(50));
+            if (!_useWiFi)
+            {
+                _comPort = GUILayout.TextField(_comPort, GUILayout.Width(60));
+                if (GUILayout.Button(_serialPort != null && _serialPort.IsOpen ? "断开" : "连接", GUILayout.Width(85))) ConnectSerial();
+            }
+            else
+            {
+                _targetIP = GUILayout.TextField(_targetIP, GUILayout.Width(120));
+            }
             GUILayout.FlexibleSpace();
-
-
-            if (GUILayout.Button(_isWaitingForKey ? "<color=yellow>Press any key...</color>" : $"Menu:[{_menuKey}]", GUILayout.Width(100)))
+            if (GUILayout.Button(_isWaitingForKey ? "<color=yellow>请按键...</color>" : $"菜单:[{_menuKey}]", GUILayout.Width(100)))
                 _isWaitingForKey = true;
-
-            if (GUILayout.Button(_isWaitingForPauseKey ? "<color=yellow>Press any key...</color>" : $"Stop:[{_pauseKey}]", GUILayout.Width(100)))
+            if (GUILayout.Button(_isWaitingForPauseKey ? "<color=yellow>请按键...</color>" : $"Stop:[{_pauseKey}]", GUILayout.Width(100)))
                 _isWaitingForPauseKey = true;
-
             GUILayout.EndHorizontal();
-
-            _uiOpacity = LabelSlider("Opacity", _uiOpacity, 0f, 1.0f);
-            _targetHz = (int)LabelSlider($"Rate: <color=cyan>{_displayHz}Hz</color>", _targetHz, 10, 200);
-
-            if (GUILayout.Button("<color=yellow>Save All Settings</color>"))
+            _uiOpacity = LabelSlider("透明度", _uiOpacity, 0f, 1.0f);
+            _targetHz = (int)LabelSlider($"输出频率: <color=cyan>{_displayHz}Hz</color>", _targetHz, 10, 200);
+            if (GUILayout.Button("<color=yellow>保存当前全部配置</color>"))
             {
                 SaveTemplateList();
                 SaveCurrentTemplate();
@@ -299,18 +285,13 @@ namespace SR6PluginProject
                 PlayerPrefs.Save();
             }
             GUILayout.EndVertical();
-
-            _isRangeLocked = GUILayout.Toggle(_isRangeLocked, _isRangeLocked ? "【Mapping Range Locked】" : "【Auto-recording Motion Range...】", "button", GUILayout.Height(30));
-
+            _isRangeLocked = GUILayout.Toggle(_isRangeLocked, _isRangeLocked ? "【映射范围已锁定】" : "【正在自动记录动作范围】", "button", GUILayout.Height(30));
             _scrollPos = GUILayout.BeginScrollView(_scrollPos);
-            _globalSmooth = LabelSlider("Global Smoothing", _globalSmooth, 0.05f, 0.8f);
-
+            _globalSmooth = LabelSlider("全局平滑", _globalSmooth, 0.05f, 0.8f);
             foreach (var axis in _axisList) DrawAxisBox(axis);
-
             GUILayout.EndScrollView();
             GUILayout.EndArea();
         }
-
         private void DrawAxisBox(AxisConfig cfg)
         {
             GUI.backgroundColor = _pinkTheme;
@@ -323,18 +304,15 @@ namespace SR6PluginProject
                 cfg.ShowPicker = !cfg.ShowPicker;
                 if (cfg.ShowPicker) { _paramMaxMove.Clear(); ScanModel(); }
             }
-            bool newInvert = GUILayout.Toggle(cfg.Invert, "Invert", GUILayout.Width(50));
+            bool newInvert = GUILayout.Toggle(cfg.Invert, "反转", GUILayout.Width(50));
             if (newInvert != cfg.Invert)
             {
                 cfg.Invert = newInvert;
                 SaveCurrentTemplate();
             }
-
             if (GUILayout.Button("C", GUILayout.Width(25))) cfg.Offset = 0.5f;
             GUILayout.EndHorizontal();
-
             if (cfg.ShowPicker) DrawParameterPicker(cfg);
-
             if (cfg.IsActive)
             {
                 GUILayout.BeginHorizontal();
@@ -342,30 +320,25 @@ namespace SR6PluginProject
                 cfg.MaxStr = GUILayout.TextField(cfg.MaxStr, GUILayout.Width(50)); GUILayout.Label($"(Raw:{cfg.RawValue:F1})", GUILayout.Width(80));
                 if (_isRangeLocked) { float.TryParse(cfg.MinStr, out cfg.Min); float.TryParse(cfg.MaxStr, out cfg.Max); }
                 GUILayout.EndHorizontal();
-                cfg.Multiplier = LabelSlider("Multiplier", cfg.Multiplier, 0f, 2.0f);
+                cfg.Multiplier = LabelSlider("倍率", cfg.Multiplier, 0f, 2.0f);
             }
-            cfg.Offset = LabelSlider(cfg.IsActive ? "Offset" : "Debug", cfg.Offset, 0f, 1f);
-
+            cfg.Offset = LabelSlider(cfg.IsActive ? "偏移" : "调试", cfg.Offset, 0f, 1f);
             DrawNeonHandleBar(cfg.CurrentVal, cfg.IsActive);
-
             GUILayout.EndVertical();
         }
-
         private void DrawNeonHandleBar(float v, bool active)
         {
             Rect r = GUILayoutUtility.GetRect(400, 12);
             GUI.DrawTexture(r, _darkTex);
-
             float handleWidth = 10f;
             Rect handleRect = new Rect(r.x + (v * (r.width - handleWidth)), r.y - 1, handleWidth, 14);
             GUI.DrawTexture(handleRect, active ? _neonTex : Texture2D.whiteTexture);
         }
-
         private void DrawParameterPicker(AxisConfig cfg)
         {
             GUILayout.BeginVertical("box");
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Search:", GUILayout.Width(40));
+            GUILayout.Label("搜索:", GUILayout.Width(40));
             _searchText = GUILayout.TextField(_searchText);
             GUILayout.EndHorizontal();
             _pickerScrollPos = GUILayout.BeginScrollView(_pickerScrollPos, GUILayout.Height(250));// 爱来自Gohyrt
@@ -383,7 +356,6 @@ namespace SR6PluginProject
             GUILayout.EndScrollView();
             GUILayout.EndVertical();
         }
-
         private float LabelSlider(string l, float v, float min, float max)
         {
             GUILayout.BeginHorizontal(); GUILayout.Label(l, GUILayout.Width(110));
@@ -391,7 +363,6 @@ namespace SR6PluginProject
             GUILayout.Label(r.ToString("F2"), GUILayout.Width(40));
             GUILayout.EndHorizontal(); return r;
         }
-
         private void ConnectSerial()
         {
             try
@@ -418,15 +389,14 @@ namespace SR6PluginProject
                 _serialPort = null;
             }
         }
-
         private void ResetRanges() { foreach (var a in _axisList) { a.Min = 0f; a.Max = 0.1f; a.MinStr = "0"; a.MaxStr = "0.1"; } }
         private void MoveTemplate(int idx, int dir) { int target = idx + dir; if (target < 0 || target >= _templateNames.Count) return; string t = _templateNames[idx]; _templateNames[idx] = _templateNames[target]; _templateNames[target] = t; if (_selectedTemplateIndex == idx) _selectedTemplateIndex = target; else if (_selectedTemplateIndex == target) _selectedTemplateIndex = idx; SaveTemplateList(); }
         private void CreateNewTemplate() { if (!_templateNames.Contains(_newTemplateName)) { _templateNames.Add(_newTemplateName); _selectedTemplateIndex = _templateNames.Count - 1; SaveTemplateList(); SaveCurrentTemplate(); ScanModel(); } }
-        private void ResetCurrentTemplate() { foreach (var a in _axisList) { a.Name = "Unbound"; a.Multiplier = 1.0f; a.Offset = 0.5f; a.Invert = false; a.Min = 0f; a.Max = 1f; a.MinStr = "0"; a.MaxStr = "1"; } _globalSmooth = 0.25f; _isRangeLocked = true; }
+        private void ResetCurrentTemplate() { foreach (var a in _axisList) { a.Name = "未绑定"; a.Multiplier = 1.0f; a.Offset = 0.5f; a.Invert = false; a.Min = 0f; a.Max = 1f; a.MinStr = "0"; a.MaxStr = "1"; } _globalSmooth = 0.25f; _isRangeLocked = true; }
         private void DeleteTemplate() { if (_templateNames.Count <= 1) return; _templateNames.RemoveAt(_selectedTemplateIndex); _selectedTemplateIndex = 0; SaveTemplateList(); LoadCurrentTemplate(); }
         private void SaveTemplateList() => PlayerPrefs.SetString("SR6_TempList", string.Join("|", _templateNames.ToArray()));
-        private void LoadTemplateList() { string l = PlayerPrefs.GetString("SR6_TempList", "Default Template"); _templateNames = new List<string>(l.Split('|')); }
-        private void SaveCurrentTemplate() { string pre = "SR6_T_" + _templateNames[_selectedTemplateIndex]; PlayerPrefs.SetString("SR6_LastCOM", _comPort); foreach (var a in _axisList) { PlayerPrefs.SetString(pre + a.TCodeKey + "_N", a.Name); PlayerPrefs.SetFloat(pre + a.TCodeKey + "_M", a.Multiplier); PlayerPrefs.SetFloat(pre + a.TCodeKey + "_O", a.Offset); PlayerPrefs.SetInt(pre + a.TCodeKey + "_I", a.Invert ? 1 : 0); PlayerPrefs.SetFloat(pre + a.TCodeKey + "_Min", a.Min); PlayerPrefs.SetFloat(pre + a.TCodeKey + "_Max", a.Max); } PlayerPrefs.Save(); }
-        private void LoadCurrentTemplate() { string pre = "SR6_T_" + _templateNames[_selectedTemplateIndex]; _comPort = PlayerPrefs.GetString("SR6_LastCOM", "COM4"); foreach (var a in _axisList) { a.Name = PlayerPrefs.GetString(pre + a.TCodeKey + "_N", "Unbound"); a.Multiplier = PlayerPrefs.GetFloat(pre + a.TCodeKey + "_M", 1.0f); a.Offset = PlayerPrefs.GetFloat(pre + a.TCodeKey + "_O", 0.5f); a.Invert = PlayerPrefs.GetInt(pre + a.TCodeKey + "_I", 0) == 1; a.Min = PlayerPrefs.GetFloat(pre + a.TCodeKey + "_Min", 0f); a.Max = PlayerPrefs.GetFloat(pre + a.TCodeKey + "_Max", 1f); a.MinStr = a.Min.ToString("F1"); a.MaxStr = a.Max.ToString("F1"); } }
+        private void LoadTemplateList() { string l = PlayerPrefs.GetString("SR6_TempList", "默认模板"); _templateNames = new List<string>(l.Split('|')); }
+        private void SaveCurrentTemplate() { string pre = "SR6_T_" + _templateNames[_selectedTemplateIndex]; PlayerPrefs.SetString("SR6_WiFi_Addr", _targetIP); PlayerPrefs.SetInt("SR6_WiFi_On", _useWiFi ? 1 : 0); PlayerPrefs.SetString("SR6_LastCOM", _comPort); foreach (var a in _axisList) { PlayerPrefs.SetString(pre + a.TCodeKey + "_N", a.Name); PlayerPrefs.SetFloat(pre + a.TCodeKey + "_M", a.Multiplier); PlayerPrefs.SetFloat(pre + a.TCodeKey + "_O", a.Offset); PlayerPrefs.SetInt(pre + a.TCodeKey + "_I", a.Invert ? 1 : 0); PlayerPrefs.SetFloat(pre + a.TCodeKey + "_Min", a.Min); PlayerPrefs.SetFloat(pre + a.TCodeKey + "_Max", a.Max); } PlayerPrefs.Save(); }
+        private void LoadCurrentTemplate() { string pre = "SR6_T_" + _templateNames[_selectedTemplateIndex]; _targetIP = PlayerPrefs.GetString("SR6_WiFi_Addr", "192.168.0.1:8000"); _useWiFi = PlayerPrefs.GetInt("SR6_WiFi_On", 0) == 1; _comPort = PlayerPrefs.GetString("SR6_LastCOM", "COM4"); foreach (var a in _axisList) { a.Name = PlayerPrefs.GetString(pre + a.TCodeKey + "_N", "未绑定"); a.Multiplier = PlayerPrefs.GetFloat(pre + a.TCodeKey + "_M", 1.0f); a.Offset = PlayerPrefs.GetFloat(pre + a.TCodeKey + "_O", 0.5f); a.Invert = PlayerPrefs.GetInt(pre + a.TCodeKey + "_I", 0) == 1; a.Min = PlayerPrefs.GetFloat(pre + a.TCodeKey + "_Min", 0f); a.Max = PlayerPrefs.GetFloat(pre + a.TCodeKey + "_Max", 1f); a.MinStr = a.Min.ToString("F1"); a.MaxStr = a.Max.ToString("F1"); } }
     }
 }
