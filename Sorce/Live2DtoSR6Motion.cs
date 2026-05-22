@@ -53,7 +53,6 @@ namespace SR6PluginProject
             new AxisConfig("上下 L0", "L0"), new AxisConfig("倾斜 R1", "R1"),
             new AxisConfig("前后 L1", "L1"), new AxisConfig("左右 L2", "L2"),
             new AxisConfig("旋转 R0", "R0"), new AxisConfig("俯仰 R2", "R2")
-
         };
         private int _targetHz = 50, _displayHz = 0, _actualSendCount = 0;
         private float _globalSmooth = 0.25f, _counterTimer = 0f, _lastSendTime = 0f;
@@ -89,7 +88,7 @@ namespace SR6PluginProject
         }
         void Awake()
         {
-            Logger.LogInfo($"v{Info.Metadata.Version} 初始化成功！爱来自 Gohyrt");
+            Logger.LogInfo($"v{Info.Metadata.Version} 初始化成功！");
             _menuKey = (KeyCode)PlayerPrefs.GetInt("SR6_MenuKey", (int)KeyCode.F9);
             _uiOpacity = PlayerPrefs.GetFloat("SR6_Opacity", 0.95f);
             _targetHz = PlayerPrefs.GetInt("SR6_TargetHz", 50);
