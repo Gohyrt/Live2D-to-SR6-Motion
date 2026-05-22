@@ -58,7 +58,7 @@ namespace SR6PluginProject
         private float _globalSmooth = 0.25f, _counterTimer = 0f, _lastSendTime = 0f;
         private bool _isRangeLocked = true;
         private bool _useWiFi = false;
-        private string _targetIP = "192.168.0.1:8000";
+        private string _targetIP = "192.168.0.3:8000";
         private UdpClient _udpClient = new UdpClient();
         private void RenameTemplate()
         {
