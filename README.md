@@ -10,7 +10,7 @@
 
 #### **Motion Mapping**
 *   Live2D → T-Code: Map character parameters to hardware axes.
-*   Dynamic Mapping: Full mapping for **SR6** and backward compatible with **OSR2**.
+*   Dynamic Mapping: Full mapping for **SR6**.
 
 #### **Data Processing**
 *   Real-time Processing: Precise control via custom Multiplier and Offset.
