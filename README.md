@@ -1,10 +1,3 @@
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/634af165-f0c7-43d2-ab90-86cd2b10ac94" width="400" alt="image" />
-</p>
-
-
-
-
 ##  **Features**
 
 
