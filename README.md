@@ -1,10 +1,18 @@
-##  **Features**
+<img width="502" height="850" alt="屏幕截图 2026-05-23 030716" src="https://github.com/user-attachments/assets/72aa9809-ddbe-4cfe-ad2d-a480b2740752" />
+
+##  **功能**
 
 
-#### **Motion Mapping**
-*   Live2D → T-Code: Map character parameters to hardware axes.
-*   Dynamic Mapping: Full mapping for **SR6**.
+#### **动作映射**
+*   Live2D → T-Code: 将角色的参数精准映射到硬件轴向。
+*  动态映射 : 为 SR6 设备提供全面的动态映射支持。
 
-#### **Data Processing**
-*   Real-time Processing: Precise control via custom Multiplier and Offset.
-*   Global Smoothing: Built-in Lerp algorithm to filter out jittery animations and protect hardware.
+#### **数据处理**
+*   实时处理:通过自定义的倍率和偏移实现精细化控制。
+*   全局平滑: 使用线性插值算法过滤动画抖动，保护硬件设备.
+
+
+------------------
+本仓库开源的是初版核心思路代码，欢迎以此为参考定制你自己的版本。
+
+插件后续经过精心设计的版本可通过[爱发电](https://afdian.com/a/Gohyrt)赞助获取。
