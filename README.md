@@ -1,4 +1,7 @@
-<img width="502" height="850" alt="屏幕截图 2026-05-23 030716" src="https://github.com/user-attachments/assets/72aa9809-ddbe-4cfe-ad2d-a480b2740752" />
+<p align="center">
+  <img width="502" height="850" alt="截图" src="https://github.com/user-attachments/assets/72aa9809-ddbe-4cfe-ad2d-a480b2740752" />
+</p>
+
 
 ##  **功能**
 
